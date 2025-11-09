@@ -10,6 +10,7 @@ type ChatPosition = "bottom-right" | "bottom-left";
 
 interface ChatWidgetProps {
   dealershipName: string;
+  dealershipId?: string;
   logoSrc?: string;
   position?: ChatPosition;
   placeholder?: string;
@@ -25,6 +26,7 @@ interface ChatMessage {
 
 export default function ChatWidget({
   dealershipName,
+  dealershipId,
   logoSrc,
   position = "bottom-right",
   placeholder = "Type your message...",
@@ -52,6 +54,45 @@ export default function ChatWidget({
       });
     }
   }, [messages, isOpen, isTyping]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.parent === window) return;
+    window.parent.postMessage(
+      {
+        source: "dealerchat-widget",
+        type: "state-change",
+        open: isOpen
+      },
+      "*"
+    );
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.parent === window) return;
+    window.parent.postMessage(
+      {
+        source: "dealerchat-widget",
+        type: "ready"
+      },
+      "*"
+    );
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.parent === window) return;
+    if (!dealershipId) return;
+    window.parent.postMessage(
+      {
+        source: "dealerchat-widget",
+        type: "dealership",
+        dealershipId
+      },
+      "*"
+    );
+  }, [dealershipId]);
 
   const handleToggle = () => {
     setIsOpen((prev) => !prev);
@@ -88,7 +129,7 @@ export default function ChatWidget({
 
   const resolveAssistantResponse = async (input: string) => {
     if (!onSendMessage) {
-      return defaultResponder(input);
+      return defaultResponder(input, dealershipName);
     }
     const result = await onSendMessage(input);
     return typeof result === "string" && result.length > 0
@@ -317,7 +358,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   );
 }
 
-function defaultResponder(input: string) {
+function defaultResponder(input: string, dealershipName: string) {
   if (/test drive/i.test(input)) {
     return "I'd be happy to help schedule a test drive. What day works best for you?";
   }
@@ -330,6 +371,6 @@ function defaultResponder(input: string) {
     return "We're open Monday–Saturday 9am–7pm and Sunday 11am–5pm.";
   }
 
-  return "Thanks for reaching out! A team member will follow up shortly.";
+  return `Thanks for reaching out to ${dealershipName}! A team member will follow up shortly.`;
 }
 
