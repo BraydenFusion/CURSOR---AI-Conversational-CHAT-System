@@ -5,6 +5,7 @@
     "allowJs": false,
     "skipLibCheck": true,
     "strict": true,
+    "noEmit": true,
     "noImplicitReturns": true,
     "noUnusedLocals": true,
     "module": "esnext",
@@ -12,6 +13,7 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "preserve",
+    "esModuleInterop": true,
     "incremental": true,
     "baseUrl": ".",
     "paths": {
