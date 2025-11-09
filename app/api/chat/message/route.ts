@@ -5,6 +5,7 @@ import { env } from "@/lib/env";
 import { z } from "zod";
 import jwt from "jsonwebtoken";
 import OpenAI from "openai";
+import { Prisma } from "@prisma/client";
 
 const requestSchema = z.object({
   sessionToken: z.string().min(1, "sessionToken is required"),
@@ -14,6 +15,43 @@ const requestSchema = z.object({
 const openai = new OpenAI({
   apiKey: env.OPENAI_API_KEY
 });
+
+type AssistantEntities = {
+  vehicle?: {
+    make?: string | null;
+    model?: string | null;
+    year?: string | number | null;
+  };
+  priceRange?: {
+    min?: number | null;
+    max?: number | null;
+  };
+  bodyType?: string | null;
+  condition?: string | null;
+  [key: string]: unknown;
+};
+
+interface AssistantResponsePayload {
+  reply?: string;
+  intent?: string;
+  entities?: unknown;
+}
+
+interface VehicleSuggestion {
+  id: string;
+  year?: number | null;
+  make?: string | null;
+  model?: string | null;
+  trim?: string | null;
+  price?: number | null;
+  condition?: string | null;
+  mileage?: number | null;
+  exteriorColor?: string | null;
+  bodyType?: string | null;
+  images: string[];
+  primaryImage?: string | null;
+  availability?: string | null;
+}
 
 export async function POST(request: Request) {
   try {
@@ -60,23 +98,6 @@ export async function POST(request: Request) {
 
     const history = [...previousMessages].reverse();
 
-    const vehicles = await prisma.vehicle.findMany({
-      where: { dealershipId: session.dealershipId },
-      orderBy: { updatedAt: "desc" },
-      take: 5,
-      select: {
-        id: true,
-        year: true,
-        make: true,
-        model: true,
-        trim: true,
-        price: true,
-        mileage: true,
-        condition: true,
-        availability: true
-      }
-    });
-
     const systemPrompt = `
 You are a helpful car dealership assistant for ${session.dealership.name}.
 Your role is to help customers find vehicles, answer questions, and schedule appointments.
@@ -87,13 +108,8 @@ Always try to capture their contact info (name, email, phone) naturally.
 Never make up vehicle details - only use real inventory data provided to you.
 `;
 
-    const inventoryContext = vehicles.length
-      ? `Available inventory:\n${JSON.stringify(vehicles)}`
-      : "No inventory data is currently available.";
-
     const chatMessages = [
       { role: "system" as const, content: systemPrompt },
-      { role: "system" as const, content: inventoryContext },
       ...history.map((msg) => ({
         role: msg.role === "USER" ? ("user" as const) : ("assistant" as const),
         content: msg.content
@@ -116,25 +132,46 @@ Never make up vehicle details - only use real inventory data provided to you.
       );
     }
 
-    let parsedResponse: {
-      reply: string;
-      intent: string;
-      entities?: Array<{ type: string; value: string }>;
-    };
-
+    let parsedResponse: AssistantResponsePayload;
     try {
       parsedResponse = JSON.parse(assistantContent);
     } catch (error) {
       parsedResponse = {
         reply: assistantContent,
         intent: "UNKNOWN",
-        entities: []
+        entities: {}
       };
     }
 
-    const reply = parsedResponse.reply ?? assistantContent;
-    const intent = parsedResponse.intent ?? "UNKNOWN";
-    const entities = parsedResponse.entities ?? [];
+    let reply = parsedResponse.reply ?? assistantContent;
+    const intent = (parsedResponse.intent ?? "UNKNOWN").toUpperCase();
+    const entities = normalizeEntities(parsedResponse.entities);
+
+    let vehicles: VehicleSuggestion[] = [];
+
+    if (intent === "INVENTORY_SEARCH") {
+      try {
+        const inventory = await searchInventory(session.dealershipId, entities);
+        vehicles = inventory.vehicles;
+        if (vehicles.length) {
+          reply = formatInventoryReply(vehicles, entities, session.dealership.name);
+          await prisma.vehicleView.createMany({
+            data: vehicles.map((vehicle) => ({
+              sessionId: session.id,
+              vehicleId: vehicle.id
+            })),
+            skipDuplicates: true
+          });
+        } else {
+          reply =
+            "I couldn't find any vehicles that match those preferences right now. Would you like me to broaden the search or notify you when something becomes available?";
+        }
+      } catch (inventoryError) {
+        console.error("Inventory lookup failed", inventoryError);
+        reply =
+          "I'm having trouble fetching the inventory at the moment. Could you try narrowing the details or checking back in a moment?";
+      }
+    }
 
     await prisma.message.create({
       data: {
@@ -150,7 +187,8 @@ Never make up vehicle details - only use real inventory data provided to you.
       {
         reply,
         intent,
-        entities
+        entities,
+        vehicles
       },
       { status: 200 }
     );
@@ -171,6 +209,328 @@ Never make up vehicle details - only use real inventory data provided to you.
 
     return handleApiError(error);
   }
+}
+
+function normalizeEntities(raw: unknown): AssistantEntities {
+  if (!raw) return {};
+
+  if (Array.isArray(raw)) {
+    const result: AssistantEntities = {};
+    for (const item of raw) {
+      if (!item || typeof item !== "object") continue;
+      const type = String((item as Record<string, unknown>).type ?? "").toLowerCase();
+      const value = (item as Record<string, unknown>).value;
+      if (!type) continue;
+
+      if (type.includes("vehicle.make")) {
+        result.vehicle ??= {};
+        result.vehicle.make = value ? String(value) : null;
+      } else if (type.includes("vehicle.model")) {
+        result.vehicle ??= {};
+        result.vehicle.model = value ? String(value) : null;
+      } else if (type.includes("vehicle.year")) {
+        result.vehicle ??= {};
+        const yearNumber = Number(value);
+        result.vehicle.year = Number.isFinite(yearNumber) ? yearNumber : String(value ?? "");
+      } else if (type.includes("price.min")) {
+        result.priceRange ??= {};
+        const num = Number(value);
+        if (Number.isFinite(num)) result.priceRange.min = num;
+      } else if (type.includes("price.max")) {
+        result.priceRange ??= {};
+        const num = Number(value);
+        if (Number.isFinite(num)) result.priceRange.max = num;
+      } else if (type.includes("bodytype")) {
+        result.bodyType = value ? String(value) : null;
+      } else if (type.includes("condition")) {
+        result.condition = value ? String(value).toUpperCase() : null;
+      }
+    }
+    return result;
+  }
+
+  if (typeof raw === "object" && raw !== null) {
+    const clone = JSON.parse(JSON.stringify(raw)) as AssistantEntities;
+    if (clone.vehicle?.year) {
+      const num = Number(clone.vehicle.year);
+      clone.vehicle.year = Number.isFinite(num) ? num : clone.vehicle.year;
+    }
+    if (clone.priceRange) {
+      if (clone.priceRange.min !== undefined) {
+        const minNum = Number(clone.priceRange.min);
+        clone.priceRange.min = Number.isFinite(minNum) ? minNum : null;
+      }
+      if (clone.priceRange.max !== undefined) {
+        const maxNum = Number(clone.priceRange.max);
+        clone.priceRange.max = Number.isFinite(maxNum) ? maxNum : null;
+      }
+    }
+    if (clone.condition) {
+      clone.condition = clone.condition.toUpperCase();
+    }
+    return clone;
+  }
+
+  return {};
+}
+
+async function searchInventory(
+  dealershipId: string,
+  entities: AssistantEntities
+): Promise<{ vehicles: VehicleSuggestion[] }> {
+  const url = new URL("/api/inventory/search", env.NEXT_PUBLIC_APP_URL);
+  url.searchParams.set("dealershipId", dealershipId);
+  url.searchParams.set("limit", "10");
+  if (entities.vehicle?.make) {
+    url.searchParams.set("make", String(entities.vehicle.make));
+  }
+  if (entities.vehicle?.model) {
+    url.searchParams.set("model", String(entities.vehicle.model));
+  }
+  if (entities.vehicle?.year) {
+    url.searchParams.set("year", String(entities.vehicle.year));
+  }
+  if (entities.priceRange?.min !== undefined) {
+    url.searchParams.set("minPrice", String(Math.max(0, entities.priceRange.min ?? 0)));
+  }
+  if (entities.priceRange?.max !== undefined) {
+    url.searchParams.set("maxPrice", String(Math.max(0, entities.priceRange.max ?? 0)));
+  }
+  if (entities.bodyType) {
+    url.searchParams.set("bodyType", entities.bodyType);
+  }
+  if (entities.condition) {
+    url.searchParams.set("condition", entities.condition);
+  }
+
+  try {
+    const response = await fetch(url.toString(), {
+      cache: "no-store"
+    });
+    if (!response.ok) {
+      throw new Error(`Inventory API responded with ${response.status}`);
+    }
+    const payload = (await response.json()) as {
+      data?: Array<any>;
+    };
+    const vehicles = Array.isArray(payload.data)
+      ? payload.data.map(mapVehicleFromApi).slice(0, 10)
+      : [];
+    return { vehicles };
+  } catch (error) {
+    console.error("Inventory API fetch failed, falling back to direct query.", error);
+    const fallbackVehicles = await fallbackInventoryQuery(dealershipId, entities);
+    return { vehicles: fallbackVehicles };
+  }
+}
+
+async function fallbackInventoryQuery(
+  dealershipId: string,
+  entities: AssistantEntities
+) {
+  const where: Parameters<typeof prisma.vehicle.findMany>[0]["where"] = {
+    dealershipId,
+    availability: "IN_STOCK"
+  };
+
+  const andFilters: typeof where["AND"] = [];
+
+  if (entities.vehicle?.make) {
+    andFilters.push({
+      make: {
+        contains: String(entities.vehicle.make),
+        mode: "insensitive"
+      }
+    });
+  }
+
+  if (entities.vehicle?.model) {
+    andFilters.push({
+      model: {
+        contains: String(entities.vehicle.model),
+        mode: "insensitive"
+      }
+    });
+  }
+
+  if (entities.vehicle?.year) {
+    const yearNum = Number(entities.vehicle.year);
+    if (Number.isFinite(yearNum)) {
+      andFilters.push({ year: yearNum });
+    }
+  }
+
+  if (entities.priceRange?.min !== undefined || entities.priceRange?.max !== undefined) {
+    andFilters.push({
+      price: {
+        ...(entities.priceRange?.min !== undefined
+          ? { gte: new Prisma.Decimal(Math.max(0, entities.priceRange.min ?? 0)) }
+          : {}),
+        ...(entities.priceRange?.max !== undefined
+          ? { lte: new Prisma.Decimal(Math.max(0, entities.priceRange.max ?? 0)) }
+          : {})
+      }
+    });
+  }
+
+  if (entities.bodyType) {
+    andFilters.push({
+      bodyType: {
+        contains: entities.bodyType,
+        mode: "insensitive"
+      }
+    });
+  }
+
+  if (entities.condition) {
+    andFilters.push({
+      condition: entities.condition as any
+    });
+  }
+
+  if (andFilters.length) {
+    where.AND = andFilters;
+  }
+
+  const vehicles = await prisma.vehicle.findMany({
+    where,
+    orderBy: [
+      { featured: "desc" },
+      { price: "asc" }
+    ],
+    take: 10
+  });
+
+  return vehicles.map(mapVehicleFromRecord);
+}
+
+function mapVehicleFromApi(vehicle: any): VehicleSuggestion {
+  const images: string[] = Array.isArray(vehicle.images)
+    ? vehicle.images.filter((url: unknown) => typeof url === "string")
+    : [];
+
+  return {
+    id: String(vehicle.id),
+    year: vehicle.year ?? null,
+    make: vehicle.make ?? null,
+    model: vehicle.model ?? null,
+    trim: vehicle.trim ?? null,
+    price: typeof vehicle.price === "number" ? vehicle.price : null,
+    condition: vehicle.condition ?? null,
+    mileage: typeof vehicle.mileage === "number" ? vehicle.mileage : null,
+    exteriorColor: vehicle.exteriorColor ?? null,
+    bodyType: vehicle.bodyType ?? null,
+    images,
+    primaryImage: images[0] ?? null,
+    availability: vehicle.availability ?? null
+  };
+}
+
+function mapVehicleFromRecord(vehicle: {
+  id: string;
+  year: number;
+  make: string;
+  model: string;
+  trim: string | null;
+  price: Prisma.Decimal | null;
+  mileage: number | null;
+  condition: string;
+  exteriorColor: string | null;
+  bodyType: string | null;
+  images: any;
+  availability: string;
+}) {
+  const images = Array.isArray(vehicle.images)
+    ? vehicle.images.filter((url: unknown) => typeof url === "string")
+    : [];
+
+  return {
+    id: vehicle.id,
+    year: vehicle.year,
+    make: vehicle.make,
+    model: vehicle.model,
+    trim: vehicle.trim,
+    price: vehicle.price ? vehicle.price.toNumber() : null,
+    mileage: vehicle.mileage,
+    condition: vehicle.condition,
+    exteriorColor: vehicle.exteriorColor,
+    bodyType: vehicle.bodyType,
+    images,
+    primaryImage: images[0] ?? null,
+    availability: vehicle.availability
+  } as VehicleSuggestion;
+}
+
+function formatInventoryReply(
+  vehicles: VehicleSuggestion[],
+  entities: AssistantEntities,
+  dealershipName: string
+) {
+  if (!vehicles.length) {
+    return `I couldn't find any vehicles that match those preferences at ${dealershipName} right now. Would you like me to keep an eye out or adjust the search?`;
+  }
+
+  const descriptorParts = [];
+  const make = entities.vehicle?.make ?? vehicles[0]?.make;
+  if (make) descriptorParts.push(make);
+  const model = entities.vehicle?.model ?? vehicles[0]?.model;
+  if (model) descriptorParts.push(model);
+
+  const descriptor =
+    descriptorParts.length > 0 ? descriptorParts.join(" ") : "vehicles";
+
+  const header = `We have ${vehicles.length} ${descriptor} available:`;
+
+  const lines = vehicles
+    .slice(0, Math.min(3, vehicles.length))
+    .map((vehicle) => formatVehicleLine(vehicle))
+    .join("\n");
+
+  return `${header}\n\n${lines}\n\nWhich interests you?`;
+}
+
+function formatVehicleLine(vehicle: VehicleSuggestion) {
+  const title = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim]
+    .filter(Boolean)
+    .join(" ");
+
+  const price = typeof vehicle.price === "number" ? formatCurrency(vehicle.price) : "Price TBD";
+
+  const details: string[] = [];
+  if (vehicle.condition) {
+    details.push(
+      vehicle.condition.toUpperCase() === "NEW"
+        ? "New"
+        : vehicle.condition.toUpperCase() === "CERTIFIED"
+        ? "Certified"
+        : "Pre-Owned"
+    );
+  }
+
+  if (vehicle.condition && vehicle.condition.toUpperCase() !== "NEW" && vehicle.mileage != null) {
+    details.push(`${formatMileage(vehicle.mileage)} miles`);
+  } else if (vehicle.exteriorColor) {
+    details.push(vehicle.exteriorColor);
+  }
+
+  return `• ${title.trim()} - ${price}${
+    details.length ? " | " + details.join(" | ") : ""
+  }`;
+}
+
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0
+  }).format(value);
+}
+
+function formatMileage(mileage: number) {
+  if (mileage >= 1000) {
+    return `${Math.round(mileage / 100) / 10}K`;
+  }
+  return mileage.toString();
 }
 
 function verifySessionToken(token: string): null | { sessionId: string; dealershipId: string } {
