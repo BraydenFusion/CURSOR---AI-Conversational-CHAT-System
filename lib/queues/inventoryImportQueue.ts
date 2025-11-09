@@ -1,11 +1,10 @@
-import { Queue, QueueScheduler } from "bullmq";
+import { Queue } from "bullmq";
 import Redis from "ioredis";
 import { env } from "@/lib/env";
 
 type GlobalQueue = {
   inventoryImportConnection?: Redis;
   inventoryImportQueue?: Queue;
-  inventoryImportScheduler?: QueueScheduler;
 };
 
 const globalQueue = global as typeof global & GlobalQueue;
@@ -19,19 +18,8 @@ function getConnection() {
   return globalQueue.inventoryImportConnection;
 }
 
-function getScheduler(connection: Redis) {
-  if (!globalQueue.inventoryImportScheduler) {
-    globalQueue.inventoryImportScheduler = new QueueScheduler("inventory-import", {
-      connection
-    });
-    void globalQueue.inventoryImportScheduler.waitUntilReady();
-  }
-  return globalQueue.inventoryImportScheduler;
-}
-
 export const inventoryImportQueue = (() => {
   const connection = getConnection();
-  getScheduler(connection);
   if (!globalQueue.inventoryImportQueue) {
     globalQueue.inventoryImportQueue = new Queue("inventory-import", {
       connection

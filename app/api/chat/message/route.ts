@@ -86,7 +86,7 @@ export async function POST(request: Request) {
         role: "USER",
         content: message,
         intent: null,
-        entities: null
+        entities: Prisma.JsonNull
       }
     });
 
@@ -179,7 +179,9 @@ Never make up vehicle details - only use real inventory data provided to you.
         role: "ASSISTANT",
         content: reply,
         intent,
-        entities
+        entities: hasEntityData(entities)
+          ? (entities as Prisma.InputJsonValue)
+          : Prisma.JsonNull
       }
     });
 
@@ -209,6 +211,17 @@ Never make up vehicle details - only use real inventory data provided to you.
 
     return handleApiError(error);
   }
+}
+
+function hasEntityData(entities: AssistantEntities) {
+  if (!entities) return false;
+  return Object.values(entities).some((value) => {
+    if (!value) return false;
+    if (typeof value === "object") {
+      return Object.values(value).some((nested) => nested !== null && nested !== undefined);
+    }
+    return value !== null && value !== undefined;
+  });
 }
 
 function normalizeEntities(raw: unknown): AssistantEntities {
