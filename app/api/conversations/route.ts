@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
+import { prisma } from "@/lib/prisma";
 const ALLOWED_ROLES = ["USER", "ASSISTANT", "SYSTEM"] as const;
 type MessageRole = (typeof ALLOWED_ROLES)[number];
 

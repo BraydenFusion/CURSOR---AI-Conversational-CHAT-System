@@ -1,28 +1,38 @@
 {
-  "name": "ai-conversational-chat-system",
-  "version": "0.1.0",
+  "name": "dealerchat-ai",
+  "version": "1.0.0",
   "private": true,
-  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "worker": "node worker.js",
+    "db:migrate": "prisma migrate deploy",
+    "db:generate": "prisma generate",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio",
     "lint": "next lint",
-    "prisma:migrate": "prisma migrate dev",
-    "prisma:generate": "prisma generate",
-    "prisma:studio": "prisma studio"
+    "type-check": "tsc --noEmit",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^5.15.0",
     "@sendgrid/mail": "^8.1.0",
-    "next": "14.2.3",
+    "axios": "^1.6.2",
+    "bullmq": "^4.15.0",
+    "date-fns": "^3.0.0",
+    "ioredis": "^5.3.2",
+    "jsonwebtoken": "^9.0.2",
+    "next": "^14.2.3",
     "openai": "^4.53.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "stripe": "^14.24.0",
-    "twilio": "^4.23.0"
+    "twilio": "^4.23.0",
+    "zod": "^3.22.4"
   },
   "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.5",
     "@types/node": "^20.11.25",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
@@ -32,6 +42,7 @@
     "postcss": "^8.4.38",
     "prisma": "^5.15.0",
     "tailwindcss": "^3.4.4",
+    "tsx": "^4.7.0",
     "typescript": "^5.4.5"
   }
 }

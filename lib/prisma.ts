@@ -1,15 +1,40 @@
 import { PrismaClient } from "@prisma/client";
+import { env } from "./env";
 
-declare global {
-  // eslint-disable-next-line no-var
-  var prisma: PrismaClient | undefined;
+const globalForPrisma = global as unknown as {
+  prisma: PrismaClient | undefined;
+};
+
+export const prisma =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    datasources: {
+      db: {
+        url: env.DATABASE_URL
+      }
+    },
+    log:
+      env.NODE_ENV === "development"
+        ? ["query", "error", "warn"]
+        : ["error"]
+  });
+
+if (env.NODE_ENV !== "production") {
+  globalForPrisma.prisma = prisma;
 }
 
-const prisma = global.prisma ?? new PrismaClient();
+process.on("beforeExit", async () => {
+  console.log("🔌 Disconnecting Prisma client...");
+  await prisma.$disconnect();
+});
 
-if (process.env.NODE_ENV !== "production") {
-  global.prisma = prisma;
-}
-
-export default prisma;
+prisma
+  .$connect()
+  .then(() => {
+    console.log("✅ Database connected successfully");
+  })
+  .catch((error) => {
+    console.error("❌ Database connection failed:", error);
+    process.exit(1);
+  });
 
