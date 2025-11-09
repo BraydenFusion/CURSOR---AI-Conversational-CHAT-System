@@ -341,12 +341,12 @@ async function fallbackInventoryQuery(
   dealershipId: string,
   entities: AssistantEntities
 ) {
-  const where: Parameters<typeof prisma.vehicle.findMany>[0]["where"] = {
+  const where: Prisma.VehicleWhereInput = {
     dealershipId,
     availability: "IN_STOCK"
   };
 
-  const andFilters: typeof where["AND"] = [];
+  const andFilters: Prisma.VehicleWhereInput[] = [];
 
   if (entities.vehicle?.make) {
     andFilters.push({
