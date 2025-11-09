@@ -148,12 +148,174 @@ reminderWorker.on("failed", (job, error) => {
   console.error(`❌ Reminder job ${job?.id} failed:`, error.message);
 });
 
+const inventoryWorker = new Worker(
+  "inventory-import",
+  async (job) => {
+    console.log(`📦 Processing inventory import job ${job.id}`);
+    const {
+      dealershipId,
+      rows,
+      markMissingAsSold,
+      totalRows
+    } = job.data;
+
+    const { PrismaClient, Prisma } = require("@prisma/client");
+    const prisma = new PrismaClient();
+    const VehicleCondition = Prisma.VehicleCondition;
+    const VehicleAvailability = Prisma.VehicleAvailability;
+
+    const errors = [];
+    const seenVins = new Set();
+    let created = 0;
+    let updated = 0;
+    let processed = 0;
+
+    try {
+      for (let index = 0; index < rows.length; index += 1) {
+        const raw = rows[index];
+        processed += 1;
+
+        try {
+          const vin = normalizeVin(raw.vin);
+          if (!vin) {
+            throw new Error("Missing VIN");
+          }
+
+          seenVins.add(vin);
+
+          const condition = toVehicleCondition(raw.condition, VehicleCondition);
+          if (!condition) {
+            throw new Error(`Invalid condition "${raw.condition}"`);
+          }
+
+          const priceDecimal =
+            typeof raw.price === "number" && !Number.isNaN(raw.price)
+              ? new Prisma.Decimal(raw.price)
+              : null;
+
+          const images =
+            Array.isArray(raw.images) && raw.images.length
+              ? raw.images.filter(Boolean)
+              : [];
+
+          const data = {
+            dealershipId,
+            stockNumber: raw.stockNumber ?? null,
+            year: raw.year ?? null,
+            make: raw.make ?? null,
+            model: raw.model ?? null,
+            trim: raw.trim ?? null,
+            condition,
+            price: priceDecimal,
+            mileage: raw.mileage ?? null,
+            exteriorColor: raw.color ?? null,
+            bodyType: raw.bodyType ?? null,
+            images,
+            availability: VehicleAvailability.IN_STOCK
+          };
+
+          const result = await prisma.vehicle.upsert({
+            where: { vin },
+            update: data,
+            create: {
+              ...data,
+              vin,
+              featured: false
+            }
+          });
+
+          if (result.createdAt.getTime() === result.updatedAt.getTime()) {
+            created += 1;
+          } else {
+            updated += 1;
+          }
+        } catch (rowError) {
+          errors.push({
+            row: index + 1,
+            error: rowError.message || "Unknown error"
+          });
+        }
+
+        await job.updateProgress({
+          processed,
+          total: totalRows
+        });
+      }
+
+      let markedSold = 0;
+
+      if (markMissingAsSold && seenVins.size > 0) {
+        const result = await prisma.vehicle.updateMany({
+          where: {
+            dealershipId,
+            availability: VehicleAvailability.IN_STOCK,
+            vin: { notIn: Array.from(seenVins) }
+          },
+          data: {
+            availability: VehicleAvailability.SOLD
+          }
+        });
+        markedSold = result.count;
+      }
+
+      return {
+        processed,
+        total: totalRows,
+        created,
+        updated,
+        errors,
+        markedSold
+      };
+    } finally {
+      await prisma.$disconnect();
+    }
+  },
+  {
+    connection,
+    concurrency: 2,
+    attempts: 1
+  }
+);
+
+inventoryWorker.on("completed", (job, result) => {
+  console.log(
+    `✅ Inventory job ${job.id} completed (${result?.processed ?? 0}/${result?.total ?? 0} rows)`
+  );
+  if (result?.markedSold) {
+    console.log(`🚗 Marked ${result.markedSold} vehicles as SOLD`);
+  }
+  if (Array.isArray(result?.errors) && result.errors.length) {
+    console.warn(
+      `⚠️ Inventory job ${job.id} completed with ${result.errors.length} row errors`
+    );
+  }
+});
+
+inventoryWorker.on("failed", (job, error) => {
+  console.error(`❌ Inventory job ${job?.id} failed:`, error?.message);
+});
+
+function normalizeVin(vin) {
+  return typeof vin === "string" ? vin.trim().toUpperCase() : "";
+}
+
+function toVehicleCondition(value, VehicleCondition) {
+  if (!value) return null;
+  const normalized = String(value).trim().toUpperCase();
+  if (normalized === "NEW") return VehicleCondition.NEW;
+  if (normalized === "USED") return VehicleCondition.USED;
+  if (normalized === "CERTIFIED" || normalized === "CPO") {
+    return VehicleCondition.CERTIFIED;
+  }
+  return null;
+}
+
 const gracefulShutdown = async (signal) => {
   console.log(`\n🛑 ${signal} received, shutting down gracefully...`);
 
   try {
     console.log("⏳ Waiting for jobs to complete...");
-    await Promise.all([crmWorker.close(), reminderWorker.close()]);
+    await Promise.all([crmWorker.close(), reminderWorker.close(), inventoryWorker.close()]);
 
     console.log("🔌 Closing Redis connection...");
     await connection.quit();
@@ -178,5 +340,7 @@ setInterval(async () => {
 }, 30000);
 
 console.log("🚀 Workers started successfully");
-console.log("📋 Listening for jobs on queues: crm-push, appointment-reminders");
+console.log(
+  "📋 Listening for jobs on queues: crm-push, appointment-reminders, inventory-import"
+);
 

@@ -21,6 +21,7 @@
     "axios": "^1.6.2",
     "bullmq": "^4.15.0",
     "clsx": "^2.1.0",
+    "csv-parse": "^5.5.0",
     "date-fns": "^3.0.0",
     "framer-motion": "^11.2.6",
     "ioredis": "^5.3.2",
