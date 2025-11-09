@@ -88,6 +88,28 @@ echo $DATABASE_URL
 
 ---
 
+### 6. Worker Builds or Jobs Failing
+
+**Error:** Docker build fails or jobs crash with minimal context
+
+**Solutions:**
+- Check worker build logs for Prisma schema or dependency errors (the worker Dockerfile mirrors the web build; look for "schema.prisma not found" or missing environment vars).
+- Worker now logs unhandled promise rejections and uncaught exceptions. Re-run the failing job and inspect the payload printed after `Job payload:` to reproduce locally.
+- Ensure the worker has `DATABASE_URL` and `REDIS_URL` set in Railway; missing either will terminate the process on boot.
+- For inventory imports, confirm CSV headers match expectations—invalid rows show up in the job result under `errors`.
+- Use `railway run node worker.js` locally with the same environment variables to replicate issues.
+
+**Validation:**
+```bash
+# Tail worker job status
+railway logs --service worker --since 10m
+
+# Check a specific job
+curl https://<app-url>/api/admin/inventory/import/<jobId>
+```
+
+---
+
 ### 6. OpenAI API Errors
 
 **Error:** `401 Unauthorized` or `Rate limit exceeded`

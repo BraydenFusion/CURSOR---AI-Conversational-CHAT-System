@@ -24,6 +24,27 @@ connection.on("error", (error) => {
   console.error("❌ Worker Redis error:", error);
 });
 
+process.on("unhandledRejection", (reason) => {
+  console.error("❌ Unhandled promise rejection in worker:", reason);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("❌ Uncaught exception in worker:", error);
+});
+
+function logJobFailure(queueName, job, error) {
+  console.error(
+    `❌ ${queueName} job ${job?.id ?? "unknown"} failed after ${job?.attemptsMade ?? 0} attempts:`,
+    error?.message ?? error
+  );
+  if (job?.data) {
+    console.error("   Job payload:", job.data);
+  }
+  if (error?.stack) {
+    console.error(error.stack);
+  }
+}
+
 const crmWorker = new Worker(
   "crm-push",
   async (job) => {
@@ -89,7 +110,7 @@ crmWorker.on("completed", (job) => {
 });
 
 crmWorker.on("failed", (job, error) => {
-  console.error(`❌ Job ${job?.id} failed after ${job?.attemptsMade} attempts:`, error.message);
+  logJobFailure("crm-push", job, error);
 });
 
 const reminderWorker = new Worker(
@@ -145,7 +166,7 @@ reminderWorker.on("completed", (job) => {
 });
 
 reminderWorker.on("failed", (job, error) => {
-  console.error(`❌ Reminder job ${job?.id} failed:`, error.message);
+  logJobFailure("appointment-reminders", job, error);
 });
 
 const inventoryWorker = new Worker(
@@ -292,7 +313,7 @@ inventoryWorker.on("completed", (job, result) => {
 });
 
 inventoryWorker.on("failed", (job, error) => {
-  console.error(`❌ Inventory job ${job?.id} failed:`, error?.message);
+  logJobFailure("inventory-import", job, error);
 });
 
 function normalizeVin(vin) {
