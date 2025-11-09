@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import type { MessageRole } from "@prisma/client";
+const ALLOWED_ROLES = ["USER", "ASSISTANT", "SYSTEM"] as const;
+type MessageRole = (typeof ALLOWED_ROLES)[number];
 
 export async function GET() {
   const conversations = await prisma.conversation.findMany({
@@ -39,9 +40,7 @@ export async function POST(request: Request) {
 
 function parseMessageRole(role?: string): MessageRole {
   const normalized = role?.toUpperCase();
-  if (normalized === "ASSISTANT" || normalized === "SYSTEM") {
-    return normalized;
-  }
-  return "USER";
+  return (ALLOWED_ROLES.find((allowed) => allowed === normalized) ??
+    "USER") as MessageRole;
 }
 
