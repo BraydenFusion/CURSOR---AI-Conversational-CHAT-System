@@ -7,26 +7,191 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Conversation {
-  id           String    @id @default(cuid())
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  subject      String?
-  messages     Message[]
+model Dealership {
+  id            String          @id @default(uuid()) @db.Uuid
+  name          String
+  domain        String          @unique
+  phone         String
+  email         String
+  address       String
+  businessHours Json
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  vehicles      Vehicle[]
+  chatSessions  ChatSession[]
+  leads         Lead[]
+  appointments  Appointment[]
+
+  @@index([name])
+}
+
+model Vehicle {
+  id             String              @id @default(uuid()) @db.Uuid
+  dealershipId   String              @db.Uuid
+  vin            String              @unique
+  stockNumber    String?
+  year           Int
+  make           String
+  model          String
+  trim           String?
+  condition      VehicleCondition
+  price          Decimal?            @db.Decimal(12, 2)
+  mileage        Int?
+  bodyType       String?
+  transmission   String?
+  drivetrain     String?
+  fuelType       String?
+  mpgCity        Int?
+  mpgHighway     Int?
+  exteriorColor  String?
+  interiorColor  String?
+  features       Json?
+  images         Json?
+  availability   VehicleAvailability
+  featured       Boolean             @default(false)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  dealership     Dealership          @relation(fields: [dealershipId], references: [id], onDelete: Cascade)
+  appointments   Appointment[]
+
+  @@index([dealershipId])
+  @@index([make, model])
+  @@index([availability])
+}
+
+model ChatSession {
+  id            String        @id @default(uuid()) @db.Uuid
+  dealershipId  String        @db.Uuid
+  sessionToken  String        @unique
+  customerName  String?
+  customerEmail String?
+  customerPhone String?
+  metadata      Json?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  dealership    Dealership    @relation(fields: [dealershipId], references: [id], onDelete: Cascade)
+  messages      Message[]
+  leads         Lead[]
+
+  @@index([dealershipId])
 }
 
 model Message {
-  id             String        @id @default(cuid())
-  createdAt      DateTime      @default(now())
-  role           MessageRole
-  content        String
-  conversation   Conversation  @relation(fields: [conversationId], references: [id])
-  conversationId String
+  id        String      @id @default(uuid()) @db.Uuid
+  sessionId String      @db.Uuid
+  role      MessageRole
+  content   String
+  intent    String?
+  entities  Json?
+  createdAt DateTime    @default(now())
+
+  session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+}
+
+model Lead {
+  id                     String             @id @default(uuid()) @db.Uuid
+  dealershipId           String             @db.Uuid
+  sessionId              String             @db.Uuid
+  firstName              String
+  lastName               String
+  email                  String
+  phone                  String
+  preferredContact       LeadPreferredContact
+  vehicleInterest        Json?
+  intent                 LeadIntent
+  status                 LeadStatus         @default(NEW)
+  leadScore              Int                @default(0)
+  pushedToCRM            Boolean            @default(false)
+  conversationTranscript Json?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  dealership             Dealership         @relation(fields: [dealershipId], references: [id], onDelete: Cascade)
+  session                ChatSession        @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  appointments           Appointment[]
+
+  @@index([dealershipId])
+  @@index([status])
+  @@index([sessionId])
+}
+
+model Appointment {
+  id               String            @id @default(uuid()) @db.Uuid
+  dealershipId     String            @db.Uuid
+  leadId           String            @db.Uuid
+  vehicleId        String?           @db.Uuid
+  appointmentType  AppointmentType
+  scheduledDatetime DateTime
+  durationMinutes  Int
+  status           AppointmentStatus @default(SCHEDULED)
+  notes            String?           @db.Text
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  dealership       Dealership        @relation(fields: [dealershipId], references: [id], onDelete: Cascade)
+  lead             Lead              @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  vehicle          Vehicle?          @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+
+  @@index([dealershipId])
+  @@index([leadId])
+  @@index([scheduledDatetime])
+}
+
+enum VehicleCondition {
+  NEW
+  USED
+  CERTIFIED
+}
+
+enum VehicleAvailability {
+  IN_STOCK
+  SOLD
+  IN_TRANSIT
 }
 
 enum MessageRole {
   USER
   ASSISTANT
   SYSTEM
+}
+
+enum LeadPreferredContact {
+  EMAIL
+  PHONE
+  SMS
+}
+
+enum LeadIntent {
+  TEST_DRIVE
+  INQUIRY
+  SERVICE
+  TRADE_IN
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  APPOINTMENT_SET
+  LOST
+}
+
+enum AppointmentType {
+  TEST_DRIVE
+  SERVICE
+  GENERAL
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
 }
 
