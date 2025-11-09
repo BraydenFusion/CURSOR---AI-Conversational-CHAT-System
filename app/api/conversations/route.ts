@@ -13,6 +13,7 @@ const messageSchema = z.object({
 const requestSchema = z.object({
   dealershipId: z.string().uuid(),
   metadata: z.unknown().optional(),
+  sessionToken: z.string().uuid().optional(),
   messages: z.array(messageSchema).optional()
 });
 
@@ -32,12 +33,15 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const payload = await request.json();
-  const { dealershipId, metadata, messages = [] } = requestSchema.parse(payload);
+  const { dealershipId, metadata, sessionToken, messages = [] } = requestSchema.parse(
+    payload
+  );
 
   const session = await prisma.chatSession.create({
     data: {
       dealershipId,
       ...(metadata !== undefined ? { metadata } : {}),
+      sessionToken: sessionToken ?? crypto.randomUUID(),
       messages: {
         create: messages.map((message) => ({
           role: parseMessageRole(message.role),
