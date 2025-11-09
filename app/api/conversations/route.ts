@@ -40,7 +40,10 @@ export async function POST(request: Request) {
   const session = await prisma.chatSession.create({
     data: {
       dealershipId,
-      ...(metadata !== undefined ? { metadata } : {}),
+      metadata:
+        metadata !== undefined
+          ? (metadata as Prisma.InputJsonValue)
+          : Prisma.JsonNull,
       sessionToken: sessionToken ?? crypto.randomUUID(),
       messages: {
         create: messages.map((message) => ({
