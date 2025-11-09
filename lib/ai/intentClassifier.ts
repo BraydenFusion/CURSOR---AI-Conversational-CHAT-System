@@ -60,7 +60,7 @@ const functionDefinition = [
       required: ["intent", "confidence", "entities"]
     }
   }
-] as const;
+] satisfies Array<OpenAI.Chat.Completions.ChatCompletionTool>;
 
 export interface IntentClassificationEntities {
   vehicle?: {
@@ -101,18 +101,18 @@ Ensure confidence is between 0 and 1.`;
         { role: "system", content: prompt },
         { role: "user", content: message }
       ],
-      functions: functionDefinition,
-      function_call: { name: "classify_intent" }
+      tools: functionDefinition,
+      tool_choice: { type: "function", function: { name: "classify_intent" } }
     });
 
-    const functionCall = response.choices[0]?.message?.function_call;
+    const toolCall = response.choices[0]?.message?.tool_calls?.[0];
 
-    if (!functionCall?.arguments) {
+    if (!toolCall?.function?.arguments) {
       logger.warn("Intent classifier returned no function call arguments.");
       return fallbackResult();
     }
 
-    const parsed = JSON.parse(functionCall.arguments);
+    const parsed = JSON.parse(toolCall.function.arguments);
 
     return {
       intent: parsed.intent ?? "UNKNOWN",
