@@ -59,6 +59,8 @@ model Vehicle {
   @@index([dealershipId])
   @@index([make, model])
   @@index([availability])
+  @@index([dealershipId, make, availability])
+  @@index([price])
 }
 
 model ChatSession {
